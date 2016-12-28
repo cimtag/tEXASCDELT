@@ -1,0 +1,258 @@
+<%@ jet 
+	imports="
+		org.talend.core.model.process.INode 
+		org.talend.core.model.process.ElementParameterParser 
+		org.talend.core.model.metadata.IMetadataTable 
+		org.talend.core.model.metadata.IMetadataColumn 
+		org.talend.designer.codegen.config.CodeGeneratorArgument
+		java.util.List
+		java.util.ArrayList
+    java.util.Map
+    java.util.HashMap
+	" 
+%>
+
+<% 
+	CodeGeneratorArgument codeGenArgument = (CodeGeneratorArgument) argument;
+	INode node = (INode)codeGenArgument.getArgument();
+	String cid = node.getUniqueName();
+	boolean useExistingConnection = "true".equals(ElementParameterParser.getValue(node, "__USE_EXISTING_CONNECTION__"));
+	String connection = ElementParameterParser.getValue(node, "__CONNECTION__");
+	String host = ElementParameterParser.getValue(node, "__HOST__");
+	String port = ElementParameterParser.getValue(node, "__PORT__");
+	String connectionProperties = ElementParameterParser.getValue(node, "__CONNECTION_PROPERTIES__");
+	if (connectionProperties == null || connectionProperties.isEmpty()) {
+		connectionProperties = "null";
+	}
+	
+	// source
+	String sourceSchema = ElementParameterParser.getValue(node, "__SOURCE_SCHEMA__");
+	String database = ElementParameterParser.getValue(node, "__DBNAME__");
+	String user = ElementParameterParser.getValue(node, "__USER__");
+	String password = ElementParameterParser.getValue(node, "__PASS__");
+	String sourceTable = ElementParameterParser.getValue(node, "__TABLE__");
+	String where = ElementParameterParser.getValue(node, "__WHERE__");
+	if (where != null) {
+		where = where.replace('\r', ' ').replace("\n", "\\n\" +\n\"");
+	} else {
+		where = "null";
+	}
+	
+	boolean enableIgnore = "true".equals(ElementParameterParser.getValue(node, "__ENABLE_IGNORE__"));
+	boolean enableSCD1 = "true".equals(ElementParameterParser.getValue(node, "__ENABLE_SCD1__"));
+	boolean enableSCD2 = "true".equals(ElementParameterParser.getValue(node, "__ENABLE_SCD2__"));
+	boolean enableSCD3 = "true".equals(ElementParameterParser.getValue(node, "__ENABLE_SCD3__"));
+	boolean useSelfDefinedSourceKey = "true".equals(ElementParameterParser.getValue(node, "__USE_SELF_DEFINED_SOURCE_KEY__"));
+	boolean timeStampInSourceEnabled = "true".equals(ElementParameterParser.getValue(node, "__ENABLE_VALID_FROM_SOURCE_COLUMN__"));
+	String timeStampInSource = null;
+	
+	@SuppressWarnings("unchecked")
+	List<Map<String, String>> suppleSourceColumnConfig = (List<Map<String, String>>) ElementParameterParser.getObjectValue(node, "__SUPPLEMENTARY_SOURCE_COLUMN_CONFIG__");
+	
+	// CHANGE HERE
+	List<String> scd1aList = new ArrayList<String>();
+	List<String> scd1bList = new ArrayList<String>();
+	List<String> scd2List = new ArrayList<String>();
+	List<String> scd3List = new ArrayList<String>();
+	List<String> keyColumnList = new ArrayList<String>();
+	List<String> ignoreList = new ArrayList<String>();
+	Map<String,String> additionalSCD3ColumnMap = new HashMap<String,String>();
+	for (Map<String, String> entry : suppleSourceColumnConfig) {
+		if (enableIgnore && "true".equals(entry.get("IGNORE"))) {
+			ignoreList.add(entry.get("SCHEMA_COLUMN"));
+		}
+		else if (useSelfDefinedSourceKey && "true".equals(entry.get("IS_SOURCE_KEY"))) {
+			keyColumnList.add(entry.get("SCHEMA_COLUMN"));
+		} 
+		else if (timeStampInSourceEnabled && "true".equals(entry.get("TIME_STAMP"))) {
+			if(timeStampInSource != null) {
+				throw new RuntimeException("More than 1 timestamp column defined!");
+			}
+			timeStampInSource = entry.get("SCHEMA_COLUMN");
+		} else {
+			if (enableSCD1 && "true".equals(entry.get("SCD1A"))) {
+				scd1aList.add(entry.get("SCHEMA_COLUMN"));
+			}
+			if (enableSCD1 && enableSCD2 && "true".equals(entry.get("SCD1B"))) {
+				scd1bList.add(entry.get("SCHEMA_COLUMN"));
+			}
+			if (enableSCD2 && "true".equals(entry.get("SCD2"))) {
+				scd2List.add(entry.get("SCHEMA_COLUMN"));
+			}
+			if (enableSCD3 && "true".equals(entry.get("SCD3"))) {
+				scd3List.add(entry.get("SCHEMA_COLUMN"));
+				additionalSCD3ColumnMap.put(entry.get("SCHEMA_COLUMN"), entry.get("SCD3_ADDITIONAL_TARGET_COLUMN"));
+			}
+		}	
+	}
+	String validFromValue = ElementParameterParser.getValue(node, "__VALID_FROM_VALUE__");
+	
+	// target
+	String targetSchema = ElementParameterParser.getValue(node, "__TARGET_SCHEMA__");
+	String targetTable = ElementParameterParser.getValue(node, "__TARGET_TABLE__");
+	
+	boolean createTableIfNotExist = "true".equals(ElementParameterParser.getValue(node, "__CREATE_TABLE_IF_NOT_EXISTS__"));
+	boolean createPK = "true".equals(ElementParameterParser.getValue(node, "__CREATE_PK__"));
+	boolean createSK = "true".equals(ElementParameterParser.getValue(node, "__CREATE_SK__"));
+	String skeyColumn = ElementParameterParser.getValue(node, "__SURROGATE_KEY__");
+	boolean useCurrentFlag = "true".equals(ElementParameterParser.getValue(node, "__USE_CURRENT_FLAG__"));
+	String currentFlagColumn = ElementParameterParser.getValue(node, "__USE_CURRENT_FLAG_COLUMN__");
+	boolean useVersion = "true".equals(ElementParameterParser.getValue(node, "__USE_VERSION__"));
+	String versionColumn = ElementParameterParser.getValue(node, "__USE_VERSION_COLUMN__");
+	int versionStartsWith = 1;
+	if(useVersion) {
+		versionStartsWith = Integer.parseInt(ElementParameterParser.getValue(node, "__USE_VERSION_START__"));
+	}
+	String validTimeperiodStart = ElementParameterParser.getValue(node, "__VALID_TIMEPERIOD_START__");
+	String validTimeperiodEnd = ElementParameterParser.getValue(node, "__VALID_TIMEPERIOD_END__");
+	String validTimePeriodMaxValue = ElementParameterParser.getValue(node, "__VALID_TIMEPERIOD_MAX_VALUE__");
+	String timeOfLastSCD3Change = ElementParameterParser.getValue(node, "__TIME_OF_LAST_CHANGE__"); // only for scd3 without scd2
+	
+	
+	boolean dieOnError = "true".equals(ElementParameterParser.getValue(node, "__DIE_ON_ERROR__"));
+	
+	boolean debug = "true".equals(ElementParameterParser.getValue(node, "__DEBUG__"));
+	List<IMetadataColumn> listColumns = new ArrayList<IMetadataColumn>(); // dummy
+	List<IMetadataTable> metadatas = node.getMetadataList();
+	if (metadatas != null && metadatas.size() > 0) {
+		IMetadataTable metadata = metadatas.get(0);
+		if (metadata != null) {
+			listColumns = metadata.getListColumns();
+		}
+	}
+	boolean enableStatementLog = "true".equals(ElementParameterParser.getValue(node, "__LOG_STATS__"));
+	String statementLogFile = ElementParameterParser.getValue(node, "__LOG_STATS_FILE__");
+	String doNotExecute = ElementParameterParser.getValue(node, "__NO_EXEC_MODE__");
+	
+%>
+	// CHANGE HERE
+	de.cimt.talendcomp.exasol.EXASCDHelper <%=cid%> = new de.cimt.talendcomp.exasol.EXASCDHelper();
+	<%=cid%>.setDebug(<%=debug%>);
+	<%=cid%>.setEnableLogStatements(<%=enableStatementLog%>);
+<%  if (statementLogFile != null && statementLogFile.trim().isEmpty() == false) { %>
+	<%=cid%>.setStatementsLogFile(<%=statementLogFile%>, jobName + ":<%=cid%>");
+<%  } %>
+    // add target metadata tables
+
+<%  if (useExistingConnection) { %>
+	<%=cid%>.setConnection((java.sql.Connection) globalMap.get("conn_" + "<%=connection%>"));
+	<%=cid%>.setSourceSchema((String) globalMap.get("schema_" + "<%=connection%>"));
+<%	} else { %>
+	<%=cid%>.setSourceSchema(<%=sourceSchema%>);
+	try {
+	   // connect to database
+		<%=cid%>.connect(<%=host%>, <%=port%>, <%=database%>, <%=user%>, <%=password%>, <%=connectionProperties%>);
+	} catch (Exception e) {
+		String message = "Connect to database failed:" + e.getMessage();
+		globalMap.put("<%=cid%>_ERROR_MESSAGE", message);
+		throw new Exception(message, e);
+	}
+<%	} %>
+	<%=cid%>.setSourceTable(<%=sourceTable%>);
+<%  if (where != null && where.isEmpty() == false) { %>
+	<%=cid%>.setSourceWhereCondition(<%=where%>);
+<%	} %>
+
+	// CHANGE HERE
+	<%=cid%>.setCurrentFlagColumn(<%=currentFlagColumn%>);
+	<%=cid%>.setEnableSCD2Versioning(<%=enableSCD2%>);
+	<%=cid%>.setScdEndDate(<%=validTimePeriodMaxValue%>);
+	<%=cid%>.setSKeyColumn(<%=skeyColumn%>);
+	<%=cid%>.setTimestampInSourceColumn("<%=timeStampInSource%>");
+	<%=cid%>.setUseCurrentFlag(<%=useCurrentFlag%>);
+	<%=cid%>.setValidTimePeriodStartColumn(<%=validTimeperiodStart%>);
+	<%=cid%>.setValidTimePeriodEndColumn(<%=validTimeperiodEnd%>);
+	<%=cid%>.setVersionColumn(<%=versionColumn%>);
+	<%=cid%>.setVersionEnabled(<%=useVersion%>);
+	<%=cid%>.setVersionStartsWith(<%=versionStartsWith%>);
+	<%=cid%>.setTimeOfLastSCD3ChangeColumn(<%=timeOfLastSCD3Change%>);
+
+	<%=cid%>.setBuildTargetTableWithPk(<%=createPK%>);
+	<%=cid%>.setBuildTargetTableWithSk(<%=createSK%>);
+	<%=cid%>.setCreateTargetTable(<%=createTableIfNotExist%>);
+	<%=cid%>.setValidFromDefaultValue(<%=validFromValue%>);
+	
+	//TODO
+	<%
+	if(keyColumnList.isEmpty()) {
+		System.err.println("Error in tEXASCDELT: You need to define a key!");
+	}
+	%>
+	
+	// add source fields
+<%  for (IMetadataColumn column : listColumns) { 
+		String name = column.getLabel();
+		String type = column.getType();
+		Integer length = column.getLength();
+		Integer precision = column.getPrecision(); 
+		boolean nullable = column.isNullable();
+		boolean isKey = column.isKey();
+		if (useSelfDefinedSourceKey) {
+			isKey = keyColumnList.contains(name);
+		}
+		boolean scd1a = scd1aList.contains(name);
+		boolean scd1b = scd1bList.contains(name);
+		boolean scd2 = scd2List.contains(name);
+		boolean scd3 = scd3List.contains(name);
+		String scdAdditionalColumn = null;
+		if (scd3) {
+			scdAdditionalColumn = additionalSCD3ColumnMap.get(name);
+			if (scdAdditionalColumn == null || scdAdditionalColumn.trim().isEmpty()) {
+				scdAdditionalColumn = "null";
+			}
+		}
+		if (!ignoreList.contains(name) && !(timeStampInSourceEnabled && name.equals(timeStampInSource))) { %>
+	<%=cid%>.addSourceColumn("<%=name%>", "<%=type%>", <%=length%>, <%=precision%>, <%=nullable%>, <%=isKey%>, <%=scd1a%>, <%=scd1b%>, <%=scd2%>, <%=scd3%>, <%=scdAdditionalColumn%>);
+
+
+	
+<%      } %>
+<%  } %>
+    // target table configuration
+    <%=cid%>.setTargetSchema(<%=targetSchema%>);
+    <%=cid%>.setTargetTable(<%=targetTable%>);
+
+		
+
+
+
+    // if true none ddl or modifying statements will be executed on the database
+	<%=cid%>.doNotExecuteMode(<%=doNotExecute%>);
+	if (<%=doNotExecute%>) {
+		System.err.println("<%=cid%> runs in DO NOT EXECUTE MODE !!");
+	}
+
+
+	// run scd statements
+	try {
+		boolean execSuccess = <%=cid%>.executeAllOperations();
+		if(execSuccess) {
+			int[] returnArray = <%=cid%>.getReturnCounters();
+			if(<%=debug%>)
+				System.out.println("SCD execution finished successfully. Count inserted new records:" + returnArray[0]);
+			globalMap.put("<%=cid%>_COUNT_SCD2_INSERT_NEW_RECORDS", returnArray[0]);
+			if(<%=debug%>)
+				System.out.println("SCD execution finished successfully. Count scd1 changed records:" + returnArray[1]);
+			globalMap.put("<%=cid%>_COUNT_SCD1_CHANGED_RECORDS", returnArray[1]);
+			if(<%=debug%>)
+				System.out.println("SCD execution finished successfully. Count scd2 changed records:" + returnArray[2]);
+			globalMap.put("<%=cid%>_COUNT_SCD2_CHANGED_RECORDS", returnArray[2]);
+			if(<%=debug%>)
+				System.out.println("SCD execution finished successfully. Count scd3 changed records:" + returnArray[3]);
+			globalMap.put("<%=cid%>_COUNT_SCD3_CHANGED_RECORDS", returnArray[3]);
+			if(<%=debug%>)
+				System.out.println("SCD execution finished successfully. Count outdated records:" + returnArray[4]);
+			globalMap.put("<%=cid%>_COUNT_OUTDATED_RECORDS", returnArray[4]);
+		} else {
+			<% if(dieOnError) { %>
+					throw new Exception("SCD execution failed");
+			<% } %>
+		}
+
+	} catch (Exception e) {
+		String message = "SCD execution failed: " + e.getMessage();
+		globalMap.put("<%=cid%>_ERROR_MESSAGE", message);
+		<% if(dieOnError) { %>
+					throw new Exception(message, e);
+		<% } %>
+	}
