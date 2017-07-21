@@ -46,11 +46,13 @@ public abstract class AbstractEXASCDHelper {
 	protected boolean debug = false;
 	protected String sourceTable;
 	protected String sourceSchema;
+	protected String sourceSchemaOverwrite; //overwrite schema name when using existing connection
 	protected String sourceWhereCondition;
 	protected String targetTable;
 	protected String targetSchema;
 	protected String tempTable = "temp_talend_" + ("" + Math.random()).substring(2, 7);
 	protected String tempSchema;
+	protected String timeStampInSourceColumn;
 	private boolean enableLogStatements = false;
 	private String statementsLogFilePath = null;
 	private File statementLogFile = null;
@@ -160,6 +162,13 @@ public abstract class AbstractEXASCDHelper {
 		}
 		this.sourceSchema = sourceSchema;
 	}
+	
+	public void setSourceSchemaOverwrite(String sourceSchemaOverwrite) {
+		if (isEmpty(sourceSchemaOverwrite)) {
+			throw new IllegalArgumentException("source schema name cannot be empty or null");
+		}
+		this.sourceSchemaOverwrite = sourceSchemaOverwrite;
+	}
 
 	public void setTargetTable(String targetTable) {
 		if (isEmpty(targetTable)) {
@@ -187,6 +196,10 @@ public abstract class AbstractEXASCDHelper {
 			throw new IllegalArgumentException("temp schema name cannot be empty or null");
 		}
 		this.tempSchema = tempSchema;
+	}
+
+	public void setTimestampInSourceColumn(String timeStampInSourceColumn) {
+		this.timeStampInSourceColumn = timeStampInSourceColumn;
 	}
 
 	protected String getTargetSchemaTable() {
@@ -247,6 +260,9 @@ public abstract class AbstractEXASCDHelper {
 		} catch (Exception e) {
 			if (useInternalConnection) {
 				connection.rollback();
+			}
+			if(e instanceof SQLException) {
+				e.printStackTrace();
 			}
 			throw e;
 		} finally {
@@ -607,7 +623,7 @@ public abstract class AbstractEXASCDHelper {
 	/*
 	 * return -1 for error, 0 for no data, positive int as maximum duplicate count
 	 */
-	int getMaxDuplicatesInSource() {
+	int getMaxDuplicatesInSource(boolean includeTimestamp) throws SQLException {
 		if (doNotExecute) {
 			return 1;
 		}
@@ -615,19 +631,21 @@ public abstract class AbstractEXASCDHelper {
 		String sql = "select max(rn) from(SELECT ";
 		sql += s;
 		sql += ", count(*) AS rn FROM " + getSourceSchemaTable();
-		sql += " group by " + s + ")";
-		Statement stmt;
-		try {
-			stmt = connection.createStatement();
-			ResultSet rs = stmt.executeQuery(sql);
-			if (rs.next()) {
-				return rs.getInt(1);
-			} else {
-				return 0;
+		sql += " group by " + s;
+		if (includeTimestamp) {
+			if (isEmpty(timeStampInSourceColumn)) {
+				throw new IllegalStateException("Attempt to use timeStampInSourceColumn which has not been set");
 			}
-		} catch (SQLException e) {
-			System.err.println("error accessing source");
-			return -1;
+			sql += ", " + timeStampInSourceColumn;
+		}
+		sql += ")";
+		Statement stmt;
+		stmt = connection.createStatement();
+		ResultSet rs = stmt.executeQuery(sql);
+		if (rs.next()) {
+			return rs.getInt(1);
+		} else {
+			return 0;
 		}
 	}
 }

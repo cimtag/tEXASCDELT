@@ -3,79 +3,21 @@ package de.cimt.talendcomp.exasol;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.util.Properties;
-
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
-public class ExecSCD3JUnit {
+public class ExecSCD3JUnit extends AbstractTestBase  {
 
-	static String sourceSchema = "test_sr";
-	static String sourceTable = "EMP_NEW";
-	static String targetSchema = "test_tg";
-	static String targetTable = "EMPLOYEE";
-	static EXASCDHelper g;
-	static Connection con = null;
-	static Statement stmt = null;
 
 	/**
 	 * prepare db: delete and create source and target schemas and tables
 	 */
 	@BeforeClass
 	static public void beforeClass() throws Exception {
-		String host = null;
-		String port = null;
-		String schema = null;
-		String user = null;
-		String password = null;
-		Properties prop = new Properties();
-		InputStream input = null;
-		try {
-			input = new FileInputStream("./resources/exa_con.properties");
-			prop.load(input);
-			host = prop.getProperty("host");
-			port = prop.getProperty("port");
-			schema = prop.getProperty("schema");
-			user = prop.getProperty("user");
-			password = prop.getProperty("password");
-		} catch (IOException ex) {
-			ex.printStackTrace();
-			fail();
-		} finally {
-			if (input != null) {
-				try {
-					input.close();
-				} catch (IOException e) {
-					e.printStackTrace();
-				}
-			}
-		}
-		try {
-			Class.forName("com.exasol.jdbc.EXADriver");
-		} catch (ClassNotFoundException e) {
-			e.printStackTrace();
-			fail();
-		}
-		// con = DriverManager.getConnection("jdbc:exa:192.168.99.100:8563;schema=sys", "sys",
-		// "exasol");
-		con = DriverManager.getConnection("jdbc:exa:" + host + ":" + port + ";schema=" + schema, user,
-				password);
-		stmt = con.createStatement();
-		dropSchema(sourceSchema);
-		createSchema(sourceSchema);
+		setupBase();
 		createTable(sourceSchema, sourceTable);
-		dropSchema(targetSchema);
-		createSchema(targetSchema);
 	}
 
 	@AfterClass
@@ -96,12 +38,9 @@ public class ExecSCD3JUnit {
 		g.setSourceTable(sourceTable);
 		g.setTargetSchema(targetSchema);
 		g.setTargetTable(targetTable);
-		g.setEnableSCD2Versioning(true);
-		g.setValidTimePeriodStartColumn("valid_start");
-		g.setValidTimePeriodEndColumn("valid_end");
-		g.connect("192.168.99.100", "8563", "sys", "sys", "exasol", null);
-		g.setVersionEnabled(true);
-		g.setVersionColumn("v_col");
+		g.setEnableSCD2Versioning(false);
+		g.setTimeOfLastSCD3ChangeColumn("scd3ChangeTime");
+		g.connect(host, port, schema, user, password, null);
 	}
 
 	@Test
@@ -117,8 +56,8 @@ public class ExecSCD3JUnit {
 		g.addSourceColumn("BIRTHDATE", "DATE", 30, 0, true, false, true, false, false, false, null);
 //		g.addSourceColumn("SALARY", "DECIMAL", 9, 2, true, false, false, false, false, true,
 //				"current_salary");
-		g.addSourceColumn("SALARY", "DECIMAL", 9, 2, true, false, false, false, false, false,
-				null);
+		g.addSourceColumn("SALARY", "DECIMAL", 9, 2, true, false, false, false, false, true,
+				"new_salary");
 
 		try {
 			System.out.println(">>>executeAllOperations");
@@ -165,47 +104,6 @@ public class ExecSCD3JUnit {
 				+ "(9,'Yoda','1083-02-15',9999999)";
 		System.out.println(sql);
 		execute(sql);
-	}
-
-	static void execute(String sql) {
-		try {
-			stmt.execute(sql);
-			System.out.println("#executed: " + sql);
-		} catch (SQLException e) {
-			e.printStackTrace();
-		}
-	}
-
-	static void createSchema(String sourceSchema) {
-		try {
-			String sql = "create schema " + sourceSchema;
-			stmt.execute(sql);
-			System.out.println("#schema created: " + sourceSchema);
-		} catch (SQLException e) {
-			e.printStackTrace();
-		}
-	}
-
-	static void dropSchema(String sourceSchema) {
-		try {
-			String sql = "drop schema " + sourceSchema + " CASCADE";
-			stmt.execute(sql);
-			System.out.println("#schema dropped: " + sourceSchema);
-		} catch (SQLException e) {
-			e.printStackTrace();
-		}
-	}
-
-	static int getRowCount(String schemaTable) {
-		try {
-			String sql = "select count(*) from " + schemaTable;
-			ResultSet rs = stmt.executeQuery(sql);
-			rs.next();
-			return rs.getInt(1);
-		} catch (SQLException e) {
-			e.printStackTrace();
-			return -42;
-		}
 	}
 
 }

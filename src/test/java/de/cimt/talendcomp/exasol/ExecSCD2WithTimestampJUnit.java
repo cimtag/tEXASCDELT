@@ -3,81 +3,22 @@ package de.cimt.talendcomp.exasol;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.util.Properties;
-
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
-public class ExecSCD2WithTimestampJUnit {
+public class ExecSCD2WithTimestampJUnit extends AbstractTestBase {
 
-	static String sourceSchema = "test_sr";
-	static String sourceTable = "EMP_NEW";
-	static String targetSchema = "test_tg";
-	static String targetTable = "EMPLOYEE";
-	static EXASCDHelper g;
-	static Connection con = null;
-	static Statement stmt = null;
-	static boolean withSCD3 = false;
+	static boolean withSCD3 = true;
 
 	/**
 	 * prepare db: delete and create source and target schemas and tables
 	 */
 	@BeforeClass
 	static public void beforeClass() throws Exception {
-		String host = null;
-		String port = null;
-		String schema = null;
-		String user = null;
-		String password = null;
-		Properties prop = new Properties();
-		InputStream input = null;
-		try {
-			input = new FileInputStream("./resources/exa_con.properties");
-			prop.load(input);
-			host = prop.getProperty("host");
-			port = prop.getProperty("port");
-			schema = prop.getProperty("schema");
-			user = prop.getProperty("user");
-			password = prop.getProperty("password");
-		} catch (IOException ex) {
-			ex.printStackTrace();
-			fail();
-		} finally {
-			if (input != null) {
-				try {
-					input.close();
-				} catch (IOException e) {
-					e.printStackTrace();
-				}
-			}
-		}
-		try {
-			Class.forName("com.exasol.jdbc.EXADriver");
-		} catch (ClassNotFoundException e) {
-			e.printStackTrace();
-			fail();
-		}
-		// con = DriverManager.getConnection("jdbc:exa:192.168.99.100:8563;schema=sys", "sys",
-		// "exasol");
-		con = DriverManager.getConnection("jdbc:exa:" + host + ":" + port + ";schema=" + schema, user,
-				password);
-		stmt = con.createStatement();
-		dropSchema(sourceSchema);
-		createSchema(sourceSchema);
+		setupBase();
 		createTable(sourceSchema, sourceTable);
-		dropSchema(targetSchema);
-		createSchema(targetSchema);
 	}
 
 	@AfterClass
@@ -108,7 +49,7 @@ public class ExecSCD2WithTimestampJUnit {
 		g.setValidTimePeriodEndColumn("valid_end");
 		g.setScdEndDate("9999-02-02");
 		g.setValidFromDefaultValue("'1234-12-23'");
-		g.connect("192.168.99.100", "8563", "sys", "sys", "exasol", null);
+		g.connect(host, port, schema, user, password, null);
 		g.setVersionEnabled(true);
 		g.setVersionColumn("vers_col");
 		g.setTimestampInSourceColumn("TS1");
@@ -140,27 +81,38 @@ public class ExecSCD2WithTimestampJUnit {
 
 		// change data in staging
 		String sql = "update " + sourceSchema + "." + sourceTable + " set "
-				+ "SALARY=9999998, TS1='2016-12-14' where EMPNO=9";
+				+ "SALARY=9999998, TS1='2016-12-14' where EMPNO=9 and TS1='2016-12-13'";
 		execute(sql);
 		try {
 			System.out.println(">>>executeAllOperations");
 			g.executeAllOperations();
-			 assertEquals(5, getRowCount(targetSchema + "." + targetTable));
+			 assertEquals(4, getRowCount(targetSchema + "." + targetTable));
 		} catch (Exception e) {
 			e.printStackTrace();
 			fail();
 		}
 		// change data in staging (older date -> will not end up in target)
 		sql = "update " + sourceSchema + "." + sourceTable + " set "
+				+ "SALARY=9999997, TS1='2016-12-13 12:13' where EMPNO=9 and TS1='2016-12-13'";
+		execute(sql);
+		try {
+			System.out.println(">>>executeAllOperations");
+			g.executeAllOperations();
+			 assertEquals(4, getRowCount(targetSchema + "." + targetTable));
+		} catch (Exception e) {
+			e.printStackTrace();
+			fail();
+		}
+		// change data in staging: duplicate key and timestamp
+		sql = "update " + sourceSchema + "." + sourceTable + " set "
 				+ "SALARY=9999997, TS1='2016-12-13 12:13' where EMPNO=9";
 		execute(sql);
 		try {
 			System.out.println(">>>executeAllOperations");
 			g.executeAllOperations();
-			 assertEquals(5, getRowCount(targetSchema + "." + targetTable));
+			fail();
 		} catch (Exception e) {
 			e.printStackTrace();
-			fail();
 		}
 	}
 
@@ -175,47 +127,6 @@ public class ExecSCD2WithTimestampJUnit {
 				+ "(9,'Yoda','1083-01-01',9999998,'2016-12-12 12:34:52')";
 		System.out.println(sql);
 		execute(sql);
-	}
-
-	static void execute(String sql) {
-		try {
-			stmt.execute(sql);
-			System.out.println("#executed: " + sql);
-		} catch (SQLException e) {
-			e.printStackTrace();
-		}
-	}
-
-	static void createSchema(String sourceSchema) {
-		try {
-			String sql = "create schema " + sourceSchema;
-			stmt.execute(sql);
-			System.out.println("#schema created: " + sourceSchema);
-		} catch (SQLException e) {
-			e.printStackTrace();
-		}
-	}
-
-	static void dropSchema(String sourceSchema) {
-		try {
-			String sql = "drop schema " + sourceSchema + " CASCADE";
-			stmt.execute(sql);
-			System.out.println("#schema dropped: " + sourceSchema);
-		} catch (SQLException e) {
-			e.printStackTrace();
-		}
-	}
-
-	static int getRowCount(String schemaTable) {
-		try {
-			String sql = "select count(*) from " + schemaTable;
-			ResultSet rs = stmt.executeQuery(sql);
-			rs.next();
-			return rs.getInt(1);
-		} catch (SQLException e) {
-			e.printStackTrace();
-			return -42;
-		}
 	}
 
 }

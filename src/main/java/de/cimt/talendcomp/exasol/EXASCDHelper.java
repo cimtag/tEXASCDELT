@@ -27,14 +27,12 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 	private String validTimePeriodStartColumn;
 	private String validTimePeriodEndColumn;
 	private String versionColumn;
-	private String timeStampInSourceColumn;
 	private String currentFlagColumn;
 	private String statusInTempTableColumn = "scd_status";
 	private String timeOfLastSCD3Change;
 
 	private int versionStartsWith = 1;
-	private String validFromDefaultValue = "'"
-			+ (new Timestamp(System.currentTimeMillis())).toString() + "'";
+	private String validFromDefaultValue = "'" + (new Timestamp(System.currentTimeMillis())).toString() + "'";
 
 	private boolean createTargetTable = false;
 	private boolean buildTargetTableWithPk = false;
@@ -105,7 +103,17 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 		return true;
 	}
 
+	/**
+	 * MAIN METHOD
+	 * 
+	 * @return
+	 * @throws Exception
+	 */
 	public boolean executeAllOperations() throws Exception {
+		if (!useInternalConnection && !isEmpty(sourceSchemaOverwrite)) {
+			sourceSchema = sourceSchemaOverwrite;
+		}
+
 		try {
 			checkState();
 		} catch (IllegalStateException e) {
@@ -118,6 +126,50 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 		checkConnection();
 		connection.setAutoCommit(false);
 
+		// make sure that no duplicates are moved to temp table
+		int maxDuplicate = getMaxDuplicatesInSource(false);
+		if (maxDuplicate < 0) {
+			errorsInExecution = true;
+			errorMessage = "error accessing source";
+			if (debug) {
+				System.out.println("--" + errorMessage);
+			}
+		}
+		if (maxDuplicate == 0) {
+			if (debug) {
+				System.out.println("--no data in source");
+			}
+			connection.setAutoCommit(nonInternalConnectionOriginalAutoCommit);
+			return true;
+		}
+		if (maxDuplicate > 1) {
+			if (isEmpty(timeStampInSourceColumn)) {
+				errorsInExecution = true;
+				errorMessage = "inconsistent state of source: duplicate key entries without provided timestamp";
+				if (debug) {
+					System.out.println("--" + errorMessage);
+				}
+			} else {
+				int maxDuplicateWithTS = getMaxDuplicatesInSource(true);
+				if (maxDuplicateWithTS > 1) {
+					errorsInExecution = true;
+					errorMessage = "inconsistent state of source: duplicate key timestamp entries";
+					if (debug) {
+						System.out.println("--" + errorMessage);
+					}
+				}
+			}
+
+		}
+
+		if (errorsInExecution) {
+			if (nonInternalConnectionOriginalAutoCommit) {
+				connection.setAutoCommit(nonInternalConnectionOriginalAutoCommit);
+			}
+			throw new Exception(errorMessage);
+		}
+
+		// create target table
 		if (createTargetTable) {
 			b = executeCreateTargetTable();
 			if (!b) {
@@ -136,6 +188,7 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 			throw new Exception(errorMessage);
 		}
 
+		// create temp table
 		b = executeCreateTempTable();
 		if (!b) {
 			errorsInExecution = true;
@@ -152,43 +205,18 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 			throw new Exception(errorMessage);
 		}
 
-		// make sure that no duplicates are moved to temp table
-		int maxDuplicate = getMaxDuplicatesInSource();
-		if (maxDuplicate < 0) {
-			errorsInExecution = true;
-			errorMessage = "error accessing source";
-			if (debug) {
-				System.out.println("--" + errorMessage);
-			}
-		}
-		if (maxDuplicate == 0) {
-			if (debug) {
-				System.out.println("--no data in source");
-			}
-			connection.setAutoCommit(nonInternalConnectionOriginalAutoCommit);
-			return true;
-		}
-		if (maxDuplicate > 1 && isEmpty(timeStampInSourceColumn)) {
-			errorsInExecution = true;
-			errorMessage = "inconsistent state of source: duplicate key entries without provided timestamp";
-			if (debug) {
-				System.out.println("--" + errorMessage);
-			}
-		}
-		if (errorsInExecution) {
-			connection.rollback();
-			if (nonInternalConnectionOriginalAutoCommit) {
-				connection.setAutoCommit(nonInternalConnectionOriginalAutoCommit);
-			}
-			throw new Exception(errorMessage);
-		}
+		// move to temp table
 		for (int rn = 1; rn <= maxDuplicate; rn++) {
 			Statement statement = connection.createStatement();
+			
+			//executeBatch doesn't throw sqlexceptions for current jdbc driver
+			List<String> batchWorkaroundList = new ArrayList<>();
 
-			// move to temp table statement
 			if (maxDuplicate == 1) {
 				String sql = createMoveToTempTableStatement();
-				statement.addBatch(sql);
+//				statement.addBatch(sql);
+				batchWorkaroundList.add(sql);
+				
 				logStatement(sql, "move all data to temp table");
 				if (debug) {
 					System.out.println("--moving data to temp table");
@@ -196,9 +224,10 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 				}
 			} else {
 				String sql = createMoveToTempTableStatement(rn);
-				statement.addBatch(sql);
-				logStatement(sql,
-						"move data from partition " + rn + " of " + maxDuplicate + " to temp table");
+//				statement.addBatch(sql);
+				batchWorkaroundList.add(sql);
+				
+				logStatement(sql, "move data from partition " + rn + " of " + maxDuplicate + " to temp table");
 				if (debug) {
 					System.out.println("--moving data part " + rn + " of " + maxDuplicate + " to temp table");
 					System.out.println(sql + ";");
@@ -213,13 +242,17 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 						System.out.println("--executeSCDOperations statement: empty");
 					}
 				} else {
-					statement.addBatch(sql);
+//					statement.addBatch(sql);
+					batchWorkaroundList.add(sql);
+					
 					logStatement(sql, "scd statements");
 				}
 			}
 			if (maxDuplicate > 1 && rn != maxDuplicate) {
 				String sql = "truncate table " + getTempSchemaTable();
-				statement.addBatch(sql);
+//				statement.addBatch(sql);
+				batchWorkaroundList.add(sql);
+				
 				logStatement(sql, "truncate temp table");
 				if (debug) {
 					System.out.println("--truncate temp table");
@@ -229,7 +262,11 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 
 			// execute if (!doNotExecute)
 			if (!doNotExecute) {
-				int[] statReturnArray = statement.executeBatch();
+//				int[] statReturnArray = statement.executeBatch();
+				int[] statReturnArray = new int[batchWorkaroundList.size()];
+				for (int i = 0; i < batchWorkaroundList.size(); i++) {
+					statReturnArray[i] = statement.executeUpdate(batchWorkaroundList.get(i));
+				}
 
 				// check for errors
 				for (int k = 0; k < statReturnArray.length; k++) {
@@ -314,8 +351,8 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 		if (!errorsInExecution) {
 			if (debug) {
 				System.out.println("--executeSCDOperations counter: " + countSCD2InsertNewRecords + ", "
-						+ countSCD1ChangedRecords + "," + countSCD2ChangedRecords + ","
-						+ countSCD3ChangedRecords + ", " + countOutdatedRecords);
+						+ countSCD1ChangedRecords + "," + countSCD2ChangedRecords + "," + countSCD3ChangedRecords + ", "
+						+ countOutdatedRecords);
 				System.out.println("--executeSCDOperations commit");
 			}
 			if (!doNotExecute) {
@@ -361,15 +398,14 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 
 	protected boolean isNotInAdditionalColumns(String name) {
 		String s = name.toLowerCase();
-		if (s.equals(validTimePeriodStartColumn.toLowerCase())
-				|| s.equals(validTimePeriodEndColumn.toLowerCase())) {
+		if (s.equals(validTimePeriodStartColumn.toLowerCase()) || s.equals(validTimePeriodEndColumn.toLowerCase())) {
 			return false;
 		}
 		return true;
 	}
 
-	public Column addAdditionalColumn(String name, String type, Integer length, Integer precision,
-			boolean nullable, boolean forInsert, boolean forUpdate) {
+	public Column addAdditionalColumn(String name, String type, Integer length, Integer precision, boolean nullable,
+			boolean forInsert, boolean forUpdate) {
 		if (isEmpty(name)) {
 			throw new IllegalArgumentException("name cannot be null or empty");
 		}
@@ -393,21 +429,39 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 		return col;
 	}
 
-	String createMoveToTempTableStatement() {
+	/*
+	 * use timestampcolumn for move to temp table
+	 */
+	private boolean moveToTempTableUseTS() {
 		boolean useTimestampInSource = false;
-		if (enabledSCD2Versioning || containsSCDType("scd3")) {
-			if (!isEmpty(timeStampInSourceColumn) && !timeStampInSourceColumn.equals("null")) {
-				useTimestampInSource = true;
-			}
+		if (!isEmpty(timeStampInSourceColumn) && !timeStampInSourceColumn.equals("null")
+				&& (containsSCDType("scd2") || containsSCDType("scd3"))) {
+			useTimestampInSource = true;
 		}
+		return useTimestampInSource;
+	}
+
+	private String moveToTempTableStart() {
+		boolean useTimestampInSource = moveToTempTableUseTS();
 		String sql = "insert into " + getTempSchemaTable() + " (";
 		if (useTimestampInSource) {
 			if (enabledSCD2Versioning) {
 				sql += validTimePeriodStartColumn + ", ";
-			} else {
+			} else if (!isEmpty(timeOfLastSCD3Change) && containsSCDType("scd3")) {
 				sql += timeOfLastSCD3Change + ", ";
+			} else {
+				// scd0, scd1: no need to include this column
 			}
 		}
+		return sql;
+	}
+
+	/*
+	 * Move all data to temp table. When used it is called only once during processing.
+	 */
+	String createMoveToTempTableStatement() {
+		boolean useTimestampInSource = moveToTempTableUseTS();
+		String sql = moveToTempTableStart();
 		sql += getCslSourceString(false) + ")\n";
 		sql += "select ";
 		if (useTimestampInSource) {
@@ -420,19 +474,12 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 		return sql;
 	}
 
+	/*
+	 * Used when key duplicates exist. When used it is called multiple times during processing.
+	 */
 	String createMoveToTempTableStatement(int rn) {
-		boolean useTimestampInSource = false;
-		if (enabledSCD2Versioning || containsSCDType("scd3")) {
-			if (!isEmpty(timeStampInSourceColumn) && !timeStampInSourceColumn.equals("null")) {
-				useTimestampInSource = true;
-			}
-		}
-		String sql = "insert into " + getTempSchemaTable() + " (";
-		if (enabledSCD2Versioning) {
-			sql += validTimePeriodStartColumn + ", ";
-		} else {
-			sql += timeOfLastSCD3Change + ", ";
-		}
+		boolean useTimestampInSource = moveToTempTableUseTS();
+		String sql = moveToTempTableStart();
 		sql += getCslSourceString(false) + ")\n";
 		sql += "select ";
 		if (useTimestampInSource) {
@@ -452,7 +499,6 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 		if (!isEmpty(sourceWhereCondition)) {
 			sql += " and ( " + sourceWhereCondition + ")";
 		}
-
 		return sql;
 	}
 
@@ -529,8 +575,7 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 		// add status column for temp-table
 		if (!isTarget) {
 			while (isColumnInTargetSchema(statusInTempTableColumn)) {
-				statusInTempTableColumn = "scd_status_" + ("" + Math.random()).substring(2, 7)
-						+ " DEFAULT ' '";
+				statusInTempTableColumn = "scd_status_" + ("" + Math.random()).substring(2, 7) + " DEFAULT ' '";
 			}
 			sb.append(",\n" + statusInTempTableColumn + " VARCHAR(10)");
 		}
@@ -590,8 +635,10 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 			sb.append(column.getLength());
 			sb.append(")");
 		} else
-			// if (type.contains("boolean") || type.contains("int") || type.contains("double")
-			// || type.contains("float") || type.contains("timestamp") || type.contains("date"))
+			// if (type.contains("boolean") || type.contains("int") ||
+			// type.contains("double")
+			// || type.contains("float") || type.contains("timestamp") ||
+			// type.contains("date"))
 			// {
 			// add no length or precision
 			sb.append(type);
@@ -655,8 +702,8 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 	}
 
 	/*
-	 * Create statement for SCD type 1 data processing. If (and only if) SCD 2 is enabled the
-	 * additional status column is used.
+	 * Create statement for SCD type 1 data processing. If (and only if) SCD 2 is enabled the additional status column
+	 * is used.
 	 */
 	String createSCD1Statement(String source, String target, boolean currentOnly) {
 		if (!containsSCDType("scd1")) {
@@ -676,8 +723,8 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 			}
 			sb.append("FROM " + source);
 			if (currentOnly) {
-				sb.append(" WHERE (" + statusInTempTableColumn + " != 'CHANGED' and "
-						+ statusInTempTableColumn + " != 'NEW' and " + statusInTempTableColumn + " != 'OLD')");
+				sb.append(" WHERE (" + statusInTempTableColumn + " != 'CHANGED' and " + statusInTempTableColumn
+						+ " != 'NEW' and " + statusInTempTableColumn + " != 'OLD')");
 			} else {
 				sb.append(" WHERE (" + statusInTempTableColumn + " != 'NEW' and " + statusInTempTableColumn
 						+ " != 'OLD')");
@@ -790,8 +837,7 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 	}
 
 	/*
-	 * SCD2 STEP 3) STAGE -> TARGET
-	 * a) close old version (SCD2)
+	 * SCD2 STEP 3) STAGE -> TARGET a) close old version (SCD2)
 	 */
 	String createSCD2Statement3a(String source, String target) {
 		StringBuilder sb = new StringBuilder();
@@ -804,8 +850,8 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 			sb.append(" and ta." + versionColumn + "=sr." + versionColumn);
 		}
 		sb.append(" and ta." + validTimePeriodEndColumn + "=" + scdEndDateStr);
-		sb.append("\nwhen matched then update set ta." + validTimePeriodEndColumn + "=sr."
-				+ validTimePeriodStartColumn);
+		sb.append(
+				"\nwhen matched then update set ta." + validTimePeriodEndColumn + "=sr." + validTimePeriodStartColumn);
 		if (useCurrentFlag) {
 			sb.append(", ta." + currentFlagColumn + "=" + false);
 		}
@@ -819,8 +865,7 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 	}
 
 	/*
-	 * SCD2 STEP 3) STAGE -> TARGET
-	 * b) insert new version (SCD2)
+	 * SCD2 STEP 3) STAGE -> TARGET b) insert new version (SCD2)
 	 */
 	String createSCD2Statement3b(String source, String target) {
 		StringBuilder sb = new StringBuilder();
@@ -853,8 +898,7 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 	}
 
 	/*
-	 * SCD2 STEP 3) STAGE -> TARGET
-	 * c) insert completely new data.
+	 * SCD2 STEP 3) STAGE -> TARGET c) insert completely new data.
 	 */
 	String createSCD2Statement3c(String source, String target) {
 		StringBuilder sb = new StringBuilder();
@@ -967,10 +1011,6 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 		this.useCurrentFlag = useCurrentFlag;
 	}
 
-	public void setTimestampInSourceColumn(String timeStampInSourceColumn) {
-		this.timeStampInSourceColumn = timeStampInSourceColumn;
-	}
-
 	boolean isColumnInTargetSchema(String name) {
 		if (isEmpty(name)) {
 			throw new IllegalArgumentException("column name must not be empty");
@@ -979,13 +1019,11 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 			if (col.getName().trim().equals(name.trim())) {
 				return true;
 			}
-			if (!isEmpty(col.getAdditionalSCD3Column())
-					&& col.getAdditionalSCD3Column().trim().equals(name.trim())) {
+			if (!isEmpty(col.getAdditionalSCD3Column()) && col.getAdditionalSCD3Column().trim().equals(name.trim())) {
 				return true;
 			}
 		}
-		if (!isEmpty(validTimePeriodStartColumn)
-				&& validTimePeriodStartColumn.trim().equals(name.trim())) {
+		if (!isEmpty(validTimePeriodStartColumn) && validTimePeriodStartColumn.trim().equals(name.trim())) {
 			return true;
 		}
 		if (!isEmpty(validTimePeriodEndColumn) && validTimePeriodEndColumn.trim().equals(name.trim())) {
@@ -997,8 +1035,7 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 		if (useVersion && !isEmpty(versionColumn) && versionColumn.trim().equals(name.trim())) {
 			return true;
 		}
-		if (useCurrentFlag && !isEmpty(currentFlagColumn)
-				&& currentFlagColumn.trim().equals(name.trim())) {
+		if (useCurrentFlag && !isEmpty(currentFlagColumn) && currentFlagColumn.trim().equals(name.trim())) {
 			return true;
 		}
 		if (!isEmpty(timeOfLastSCD3Change) && timeOfLastSCD3Change.trim().equals(name.trim())) {
@@ -1045,8 +1082,7 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 		}
 		if (useCurrentFlag) {
 			if (isEmpty(currentFlagColumn)) {
-				throw new IllegalStateException(
-						"Use current flag is selected but no current flag column specified");
+				throw new IllegalStateException("Use current flag is selected but no current flag column specified");
 			}
 		}
 		// check scd3
