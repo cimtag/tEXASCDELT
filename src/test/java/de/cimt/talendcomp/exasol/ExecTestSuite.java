@@ -14,6 +14,8 @@ import org.junit.runner.RunWith;
 	ExecSCD3withoutSCD2JUnit.class, 
 	Scd2JUnit.class, 
 	ExecSCD1DuplicateKeyJUnit.class,
+	ExecSCD1a2JUnit.class,
+	ExecSCD1b2JUnit.class,
 
 	Scd1JUnit.class
 })

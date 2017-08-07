@@ -153,7 +153,7 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 				int maxDuplicateWithTS = getMaxDuplicatesInSource(true);
 				if (maxDuplicateWithTS > 1) {
 					errorsInExecution = true;
-					errorMessage = "inconsistent state of source: duplicate key timestamp entries";
+					errorMessage = "inconsistent state of source: duplicate key entries without provided timestamp or with identical timestamp";
 					if (debug) {
 						System.out.println("--" + errorMessage);
 					}
@@ -353,10 +353,12 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 				System.out.println("--executeSCDOperations counter: " + countSCD2InsertNewRecords + ", "
 						+ countSCD1ChangedRecords + "," + countSCD2ChangedRecords + "," + countSCD3ChangedRecords + ", "
 						+ countOutdatedRecords);
-				System.out.println("--executeSCDOperations commit");
 			}
-			if (!doNotExecute) {
+			if (!doNotExecute && (useInternalConnection || nonInternalConnectionOriginalAutoCommit)) {
 				connection.commit();
+				if (debug) {
+					System.out.println("--executeSCDOperations commit");
+				}
 			}
 			if (!useInternalConnection) {
 				if (debug) {
@@ -367,10 +369,10 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 			}
 			return true;
 		} else { // error
-			if (debug) {
-				System.out.println("--executeSCDOperations rollback");
-			}
-			if (!doNotExecute) {
+			if (!doNotExecute && (useInternalConnection || nonInternalConnectionOriginalAutoCommit)) {
+				if (debug) {
+					System.out.println("--executeSCDOperations rollback");
+				}
 				connection.rollback();
 			}
 			if (!useInternalConnection) {
@@ -575,9 +577,9 @@ public class EXASCDHelper extends AbstractEXASCDHelper {
 		// add status column for temp-table
 		if (!isTarget) {
 			while (isColumnInTargetSchema(statusInTempTableColumn)) {
-				statusInTempTableColumn = "scd_status_" + ("" + Math.random()).substring(2, 7) + " DEFAULT ' '";
+				statusInTempTableColumn = "scd_status_" + ("" + Math.random()).substring(2, 7);
 			}
-			sb.append(",\n" + statusInTempTableColumn + " VARCHAR(10)");
+			sb.append(",\n" + statusInTempTableColumn + " VARCHAR(10)" + " DEFAULT ' '");
 		}
 		// add pk (for scd 2 validTimePeriodStartColumn is included)
 		if (isTarget && buildTargetTableWithPk) {

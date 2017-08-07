@@ -76,7 +76,7 @@ public class ExecSCD1DuplicateKeyJUnit extends AbstractTestBase {
 			g.executeAllOperations();
 			fail();
 		} catch (Exception e) {
-			if (!e.getMessage().contains("duplicate key timestamp entries")) {
+			if (!e.getMessage().contains("inconsistent state of source: duplicate key entries without provided timestamp")) {
 				fail();
 			}
 		}
